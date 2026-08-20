@@ -1,0 +1,1 @@
+# tiago7-plugin-updater-plugin-obsidian
