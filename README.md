@@ -5,7 +5,7 @@ Atualizador fechado e conservador para um conjunto pequeno e explícito de plugi
 ## Modelo de segurança
 
 - Não usa token, login, OAuth, telemetria ou analytics.
-- Não verifica nem instala atualizações automaticamente, periodicamente ou ao iniciar o Obsidian.
+- Não faz nenhuma consulta de rede nem instala atualizações automaticamente, periodicamente ou ao iniciar o Obsidian; nessa etapa, lê somente o estado local.
 - Toda verificação e toda instalação exigem cliques explícitos e separados.
 - Não aceita repositórios, URLs ou IDs configurados pelo usuário ou recebidos da rede.
 - O próprio updater não está na whitelist e possui um bloqueio adicional contra autoatualização.
@@ -13,7 +13,7 @@ Atualizador fechado e conservador para um conjunto pequeno e explícito de plugi
 - Nenhum conteúdo, nome de nota, caminho do vault ou configuração pessoal é enviado pela rede.
 - Faz download somente dos três assets esperados e mantém todos os bytes em memória até concluir as validações.
 
-Uma release instalável precisa ser pública, não ser draft nem prerelease, ter `immutable === true` e conter exatamente `main.js`, `manifest.json` e `styles.css`. Cada asset precisa fornecer um digest `sha256:...`; o updater calcula SHA-256 localmente e cancela a operação inteira se houver divergência. O manifesto também precisa ter o ID autorizado, versão coerente com a tag e `isDesktopOnly: false`.
+Uma release instalável precisa ser pública, não ser draft nem prerelease, ter `immutable === true` e conter exatamente `main.js`, `manifest.json` e `styles.css`. Cada asset precisa estar no estado `uploaded`, declarar tamanho inteiro entre 1 byte e 5 MiB e ter exatamente esse tamanho depois do download. Também precisa fornecer um digest `sha256:...`; o updater calcula SHA-256 localmente e cancela a operação inteira se houver divergência. O manifesto precisa ter o ID autorizado, versão coerente com a tag e `isDesktopOnly: false`.
 
 Antes de substituir uma instalação, o updater salva os arquivos existentes em `<configDir>/plugins/.tiago7-plugin-updater-backups/`. `data.json` nunca é copiado, removido ou alterado. A última versão salva pode ser restaurada manualmente. Depois de instalar ou restaurar, reinicie o Obsidian para carregar os arquivos.
 

@@ -13,6 +13,7 @@ const UPDATER_ID = "tiago7-plugin-updater-plugin-obsidian";
 const REQUIRED_ASSETS = Object.freeze(["main.js", "manifest.json", "styles.css"]);
 const INSTALL_ORDER = Object.freeze(["main.js", "styles.css", "manifest.json"]);
 const BACKUP_DIRECTORY = ".tiago7-plugin-updater-backups";
+const MAX_ASSET_BYTES = 5 * 1024 * 1024;
 
 // Esta é a única fonte de autorização. Dados remotos nunca acrescentam entradas.
 const AUTHORIZED_PLUGINS = Object.freeze([
@@ -128,6 +129,7 @@ class Tiago7PluginUpdater extends Plugin {
       name: "Verificar atualizações dos meus plugins",
       callback: () => this.checkAll(),
     });
+    await this.refreshLocalStates();
   }
 
   assertSafeDefinition(definition) {
@@ -302,6 +304,19 @@ class Tiago7PluginUpdater extends Plugin {
       if (!Number.isSafeInteger(asset.id) || asset.id <= 0) {
         throw new UpdaterError("INVALID_ASSETS", `O asset ${asset.name} não possui ID válido.`);
       }
+      if (asset.state !== "uploaded") {
+        throw new UpdaterError("INVALID_ASSETS", `O asset ${asset.name} não está pronto para download.`);
+      }
+      if (
+        !Number.isSafeInteger(asset.size) ||
+        asset.size <= 0 ||
+        asset.size > MAX_ASSET_BYTES
+      ) {
+        throw new UpdaterError(
+          "INVALID_ASSETS",
+          `O tamanho declarado de ${asset.name} é inválido ou excede 5 MiB.`
+        );
+      }
       if (typeof asset.digest !== "string" || !/^sha256:[0-9a-fA-F]{64}$/.test(asset.digest)) {
         throw new UpdaterError(
           "INVALID_DIGEST",
@@ -330,6 +345,12 @@ class Tiago7PluginUpdater extends Plugin {
         throw new UpdaterError("DOWNLOAD_FAILED", `Falha ao baixar ${assetName} do GitHub.`);
       }
       const buffer = cloneArrayBuffer(response.arrayBuffer);
+      if (buffer.byteLength !== asset.size) {
+        throw new UpdaterError(
+          "INVALID_DOWNLOAD",
+          `O tamanho baixado de ${assetName} difere do tamanho declarado pelo GitHub.`
+        );
+      }
       const expected = asset.digest.slice("sha256:".length).toLowerCase();
       const actual = await sha256Hex(buffer);
       if (actual !== expected) {
@@ -655,10 +676,6 @@ class UpdaterSettingsTab extends PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.updater = plugin;
-  }
-
-  async onOpen() {
-    await this.updater.refreshLocalStates();
   }
 
   display() {
