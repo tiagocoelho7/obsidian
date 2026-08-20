@@ -263,6 +263,8 @@ class Tiago7PluginUpdater extends Plugin {
       method: "GET",
       headers: {
         Accept: accept,
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
         "X-GitHub-Api-Version": "2026-03-10",
       },
     });
@@ -367,10 +369,12 @@ class Tiago7PluginUpdater extends Plugin {
     if (!manifest || manifest.id !== definition.id) {
       throw new UpdaterError("INVALID_MANIFEST", "O ID do manifest remoto não é o autorizado.");
     }
-    if (!strictVersion(manifest.version) || manifest.version !== tagVersion) {
+    const manifestVersionIsValid = Boolean(strictVersion(manifest.version));
+    if (!manifestVersionIsValid || manifest.version !== tagVersion) {
+      const declaredVersion = manifestVersionIsValid ? manifest.version : "uma versão inválida";
       throw new UpdaterError(
         "INVALID_MANIFEST",
-        "A versão do manifest remoto é inválida ou não corresponde à tag da release."
+        `O manifest remoto declara ${declaredVersion}, mas a tag da release declara ${tagVersion}.`
       );
     }
     if (manifest.isDesktopOnly !== false) {
