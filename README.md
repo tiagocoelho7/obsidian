@@ -1,4 +1,4 @@
-  # tiago7 Plain Text Export Plugin Obsidian v1.4.5
+  # tiago7 Plain Text Export Plugin Obsidian v1.4.6
 
 ## Expansão de notas incorporadas
 
