@@ -10,10 +10,16 @@ const {
 } = require("obsidian");
 
 const UPDATER_ID = "tiago7-plugin-updater-plugin-obsidian";
-const REQUIRED_ASSETS = Object.freeze(["main.js", "manifest.json", "styles.css"]);
+const PLUGIN_FILES = Object.freeze(["main.js", "manifest.json", "styles.css"]);
+const AUTHENTICATION_ASSET = "release-signature.txt";
+const RELEASE_ASSETS = Object.freeze([...PLUGIN_FILES, AUTHENTICATION_ASSET]);
 const INSTALL_ORDER = Object.freeze(["main.js", "styles.css", "manifest.json"]);
 const BACKUP_DIRECTORY = ".tiago7-plugin-updater-backups";
 const MAX_ASSET_BYTES = 5 * 1024 * 1024;
+const MAX_AUTHENTICATION_ASSET_BYTES = 4096;
+const SIGNATURE_MAGIC = "tiago7-obsidian-plugin-release-signature-v1";
+const PINNED_PUBLIC_KEY_SPKI_B64 =
+  "MCowBQYDK2VwAyEAnEKaOvQuKdbnfu+U7DubEqfLyUNJI3grxzlfYHUtrpc=";
 
 // Esta é a única fonte de autorização. Dados remotos nunca acrescentam entradas.
 const AUTHORIZED_PLUGINS = Object.freeze([
@@ -85,6 +91,200 @@ function cloneArrayBuffer(value) {
   throw new UpdaterError("INVALID_DOWNLOAD", "O GitHub retornou um asset em formato inesperado.");
 }
 
+function encodeCanonicalBase64(bytes) {
+  if (typeof globalThis.btoa !== "function") {
+    throw new UpdaterError("CRYPTO_UNAVAILABLE", "Base64 padrão não está disponível neste dispositivo.");
+  }
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return globalThis.btoa(binary);
+}
+
+function strictCanonicalBase64Decode(value, expectedByteLength, label) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value) ||
+    typeof globalThis.atob !== "function"
+  ) {
+    throw new UpdaterError("INVALID_BASE64", `${label} não usa Base64 padrão canônico.`);
+  }
+
+  let binary;
+  try {
+    binary = globalThis.atob(value);
+  } catch (_error) {
+    throw new UpdaterError("INVALID_BASE64", `${label} não usa Base64 padrão canônico.`);
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  if (bytes.byteLength !== expectedByteLength || encodeCanonicalBase64(bytes) !== value) {
+    throw new UpdaterError("INVALID_BASE64", `${label} não usa Base64 padrão canônico.`);
+  }
+  return bytes;
+}
+
+function asciiFromBytes(bytes) {
+  let value = "";
+  for (const byte of bytes) value += String.fromCharCode(byte);
+  return value;
+}
+
+function parseReleaseSignature(rawBuffer) {
+  if (!(rawBuffer instanceof ArrayBuffer)) {
+    throw new UpdaterError("AUTHENTICATION_FAILED", "O arquivo de assinatura não contém bytes crus.");
+  }
+  const bytes = new Uint8Array(rawBuffer);
+  const lfPositions = [];
+
+  for (let index = 0; index < bytes.byteLength; index += 1) {
+    const byte = bytes[index];
+    if (byte === 0x0a) {
+      lfPositions.push(index);
+      continue;
+    }
+    if (byte < 0x21 || byte > 0x7e) {
+      throw new UpdaterError(
+        "AUTHENTICATION_FAILED",
+        "release-signature.txt contém byte proibido ou não ASCII."
+      );
+    }
+  }
+
+  if (
+    lfPositions.length !== 13 ||
+    bytes.byteLength === 0 ||
+    lfPositions[12] !== bytes.byteLength - 1
+  ) {
+    throw new UpdaterError(
+      "AUTHENTICATION_FAILED",
+      "release-signature.txt precisa ter exatamente 13 linhas terminadas em LF."
+    );
+  }
+
+  const lines = [];
+  let lineStart = 0;
+  for (const lfPosition of lfPositions) {
+    if (lfPosition === lineStart) {
+      throw new UpdaterError("AUTHENTICATION_FAILED", "release-signature.txt contém linha vazia.");
+    }
+    lines.push(asciiFromBytes(bytes.subarray(lineStart, lfPosition)));
+    lineStart = lfPosition + 1;
+  }
+
+  const exactValue = (lineIndex, prefix) => {
+    const line = lines[lineIndex];
+    if (!line.startsWith(prefix) || line.length === prefix.length) {
+      throw new UpdaterError(
+        "AUTHENTICATION_FAILED",
+        `Campo inválido na linha ${lineIndex + 1} de release-signature.txt.`
+      );
+    }
+    return line.slice(prefix.length);
+  };
+
+  if (lines[0] !== SIGNATURE_MAGIC || lines[1] !== "scheme=ed25519") {
+    throw new UpdaterError("AUTHENTICATION_FAILED", "Magic ou scheme da assinatura é inválido.");
+  }
+
+  const keyId = exactValue(2, "key-id=");
+  const host = exactValue(3, "host=");
+  const owner = exactValue(4, "owner=");
+  const repository = exactValue(5, "repository=");
+  const pluginId = exactValue(6, "plugin-id=");
+  const version = exactValue(7, "version=");
+  const tag = exactValue(8, "tag=");
+  const mainHash = exactValue(9, "main.js.sha256=");
+  const manifestHash = exactValue(10, "manifest.json.sha256=");
+  const stylesHash = exactValue(11, "styles.css.sha256=");
+  const signatureBase64 = exactValue(12, "signature=");
+
+  if (!/^sha256:[0-9a-f]{64}$/.test(keyId)) {
+    throw new UpdaterError("AUTHENTICATION_FAILED", "O key-id assinado é inválido.");
+  }
+  if (!strictVersion(version)) {
+    throw new UpdaterError("AUTHENTICATION_FAILED", "A versão assinada é inválida.");
+  }
+  for (const [name, hash] of [
+    ["main.js", mainHash],
+    ["manifest.json", manifestHash],
+    ["styles.css", stylesHash],
+  ]) {
+    if (!/^[0-9a-f]{64}$/.test(hash)) {
+      throw new UpdaterError("AUTHENTICATION_FAILED", `O hash assinado de ${name} é inválido.`);
+    }
+  }
+  if (!/^[A-Za-z0-9+/]{86}==$/.test(signatureBase64)) {
+    throw new UpdaterError("INVALID_BASE64", "A assinatura Ed25519 não usa Base64 padrão canônico.");
+  }
+
+  const signatureBytes = strictCanonicalBase64Decode(
+    signatureBase64,
+    64,
+    "A assinatura Ed25519"
+  );
+  const signedPrefix = rawBuffer.slice(0, lfPositions[11] + 1);
+
+  return {
+    keyId,
+    host,
+    owner,
+    repository,
+    pluginId,
+    version,
+    tag,
+    hashes: Object.freeze({
+      "main.js": mainHash,
+      "manifest.json": manifestHash,
+      "styles.css": stylesHash,
+    }),
+    signatureBytes,
+    signedPrefix,
+  };
+}
+
+function cloneReleaseMetadata(release) {
+  const assets = release.assets.map((asset) =>
+    Object.freeze({
+      name: asset.name,
+      id: asset.id,
+      state: asset.state,
+      size: asset.size,
+      digest: asset.digest,
+      url: asset.url,
+    })
+  );
+  return Object.freeze({
+    draft: release.draft,
+    prerelease: release.prerelease,
+    immutable: release.immutable,
+    tag_name: release.tag_name,
+    assets: Object.freeze(assets),
+  });
+}
+
+function cloneLocalSnapshot(local) {
+  return Object.freeze({ installed: local.installed, version: local.version });
+}
+
+function sameLocalSnapshot(left, right) {
+  return Boolean(
+    left &&
+    right &&
+    left.installed === right.installed &&
+    left.version === right.version
+  );
+}
+
+function assetByteLimit(assetName) {
+  return assetName === AUTHENTICATION_ASSET
+    ? MAX_AUTHENTICATION_ASSET_BYTES
+    : MAX_ASSET_BYTES;
+}
+
 async function sha256Hex(buffer) {
   if (!globalThis.crypto || !globalThis.crypto.subtle) {
     throw new UpdaterError(
@@ -94,6 +294,122 @@ async function sha256Hex(buffer) {
   }
   const digest = await globalThis.crypto.subtle.digest("SHA-256", buffer);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function derivePinnedAuthority() {
+  if (
+    !globalThis.crypto ||
+    !globalThis.crypto.subtle ||
+    typeof globalThis.crypto.subtle.importKey !== "function"
+  ) {
+    throw new UpdaterError(
+      "CRYPTO_UNAVAILABLE",
+      "A verificação Ed25519 não está disponível neste dispositivo."
+    );
+  }
+
+  const spkiBytes = strictCanonicalBase64Decode(
+    PINNED_PUBLIC_KEY_SPKI_B64,
+    44,
+    "A chave pública fixada"
+  );
+  const spkiBuffer = cloneArrayBuffer(spkiBytes);
+  const keyId = `sha256:${await sha256Hex(spkiBuffer)}`;
+  let verificationKey;
+  try {
+    verificationKey = await globalThis.crypto.subtle.importKey(
+      "spki",
+      spkiBuffer,
+      { name: "Ed25519" },
+      false,
+      ["verify"]
+    );
+  } catch (_error) {
+    throw new UpdaterError(
+      "CRYPTO_UNAVAILABLE",
+      "Não foi possível importar a chave pública Ed25519 fixada."
+    );
+  }
+  if (
+    !verificationKey ||
+    verificationKey.type !== "public" ||
+    verificationKey.extractable !== false ||
+    !verificationKey.algorithm ||
+    verificationKey.algorithm.name !== "Ed25519" ||
+    !verificationKey.usages ||
+    verificationKey.usages.length !== 1 ||
+    verificationKey.usages[0] !== "verify"
+  ) {
+    throw new UpdaterError(
+      "CRYPTO_UNAVAILABLE",
+      "A chave pública Ed25519 importada não possui as invariantes exigidas."
+    );
+  }
+  return { keyId, verificationKey };
+}
+
+async function verifyEd25519Signature(verificationKey, signatureBytes, signedPrefix) {
+  if (
+    !globalThis.crypto ||
+    !globalThis.crypto.subtle ||
+    typeof globalThis.crypto.subtle.verify !== "function"
+  ) {
+    throw new UpdaterError(
+      "CRYPTO_UNAVAILABLE",
+      "A verificação Ed25519 não está disponível neste dispositivo."
+    );
+  }
+  let verified;
+  try {
+    verified = await globalThis.crypto.subtle.verify(
+      { name: "Ed25519" },
+      verificationKey,
+      signatureBytes,
+      signedPrefix
+    );
+  } catch (_error) {
+    throw new UpdaterError("AUTHENTICATION_FAILED", "A verificação Ed25519 falhou fechada.");
+  }
+  if (verified !== true) {
+    throw new UpdaterError("AUTHENTICATION_FAILED", "A assinatura Ed25519 da release é inválida.");
+  }
+}
+
+function validateSignatureBindings(
+  definition,
+  releaseMetadata,
+  manifest,
+  computedHashes,
+  parsedSignature,
+  derivedKeyId
+) {
+  const tagVersion = versionFromTag(releaseMetadata.tag_name);
+  if (
+    parsedSignature.keyId !== derivedKeyId ||
+    parsedSignature.host !== "github.com" ||
+    definition.owner !== "tiagocoelho7" ||
+    parsedSignature.owner !== "tiagocoelho7" ||
+    parsedSignature.repository !== definition.repository ||
+    parsedSignature.pluginId !== definition.id ||
+    parsedSignature.tag !== releaseMetadata.tag_name ||
+    !tagVersion ||
+    parsedSignature.version !== tagVersion ||
+    parsedSignature.version !== manifest.version
+  ) {
+    throw new UpdaterError(
+      "AUTHENTICATION_FAILED",
+      "Os vínculos de autoridade da assinatura não correspondem à release autorizada."
+    );
+  }
+
+  for (const assetName of PLUGIN_FILES) {
+    if (parsedSignature.hashes[assetName] !== computedHashes[assetName]) {
+      throw new UpdaterError(
+        "AUTHENTICATION_FAILED",
+        `O hash assinado de ${assetName} não corresponde aos bytes autenticados.`
+      );
+    }
+  }
 }
 
 function timestampForPath(date) {
@@ -138,7 +454,8 @@ class Tiago7PluginUpdater extends Plugin {
       !definition ||
       !safePart.test(definition.id) ||
       !safePart.test(definition.owner) ||
-      !safePart.test(definition.repository)
+      !safePart.test(definition.repository) ||
+      definition.owner !== "tiagocoelho7"
     ) {
       throw new Error("Entrada insegura na whitelist do updater.");
     }
@@ -203,7 +520,7 @@ class Tiago7PluginUpdater extends Plugin {
     const manifestExists = await this.app.vault.adapter.exists(manifestPath);
 
     if (!manifestExists) {
-      for (const assetName of REQUIRED_ASSETS) {
+      for (const assetName of PLUGIN_FILES) {
         if (await this.app.vault.adapter.exists(normalizePath(`${directory}/${assetName}`))) {
           throw new UpdaterError(
             "PARTIAL_INSTALLATION",
@@ -271,6 +588,7 @@ class Tiago7PluginUpdater extends Plugin {
   }
 
   validateRelease(definition, release) {
+    this.assertSafeDefinition(definition);
     if (!release || typeof release !== "object") {
       throw new UpdaterError("INVALID_RELEASE", "A resposta da release é inválida.");
     }
@@ -291,16 +609,16 @@ class Tiago7PluginUpdater extends Plugin {
     if (!tagVersion) {
       throw new UpdaterError("INVALID_VERSION", "A tag da release não contém uma versão válida.");
     }
-    if (!Array.isArray(release.assets) || release.assets.length !== REQUIRED_ASSETS.length) {
+    if (!Array.isArray(release.assets) || release.assets.length !== RELEASE_ASSETS.length) {
       throw new UpdaterError(
         "INVALID_ASSETS",
-        "A release precisa conter exatamente main.js, manifest.json e styles.css."
+        "A release precisa conter exatamente os três arquivos do plugin e release-signature.txt."
       );
     }
 
     const assetsByName = new Map();
     for (const asset of release.assets) {
-      if (!asset || !REQUIRED_ASSETS.includes(asset.name) || assetsByName.has(asset.name)) {
+      if (!asset || !RELEASE_ASSETS.includes(asset.name) || assetsByName.has(asset.name)) {
         throw new UpdaterError("INVALID_ASSETS", "A lista de assets da release não é a esperada.");
       }
       if (!Number.isSafeInteger(asset.id) || asset.id <= 0) {
@@ -312,14 +630,14 @@ class Tiago7PluginUpdater extends Plugin {
       if (
         !Number.isSafeInteger(asset.size) ||
         asset.size <= 0 ||
-        asset.size > MAX_ASSET_BYTES
+        asset.size > assetByteLimit(asset.name)
       ) {
         throw new UpdaterError(
           "INVALID_ASSETS",
-          `O tamanho declarado de ${asset.name} é inválido ou excede 5 MiB.`
+          `O tamanho declarado de ${asset.name} é inválido ou excede o limite permitido.`
         );
       }
-      if (typeof asset.digest !== "string" || !/^sha256:[0-9a-fA-F]{64}$/.test(asset.digest)) {
+      if (typeof asset.digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(asset.digest)) {
         throw new UpdaterError(
           "INVALID_DIGEST",
           `O asset ${asset.name} não possui digest SHA-256 válido.`
@@ -334,38 +652,70 @@ class Tiago7PluginUpdater extends Plugin {
     return { tagVersion, assetsByName };
   }
 
-  async downloadAndValidate(definition, release) {
-    const { tagVersion, assetsByName } = this.validateRelease(definition, release);
-    const files = new Map();
-    const expectedDigests = new Map();
+  async authenticateCachedPayload(definition, payload) {
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      !payload.releaseMetadata ||
+      !payload.rawAssets ||
+      !payload.localSnapshot ||
+      typeof payload.localSnapshot.installed !== "boolean" ||
+      (payload.localSnapshot.installed
+        ? !strictVersion(payload.localSnapshot.version)
+        : payload.localSnapshot.version !== null)
+    ) {
+      throw new UpdaterError("AUTHENTICATION_FAILED", "O cache autenticável da release é inválido.");
+    }
 
-    for (const assetName of REQUIRED_ASSETS) {
-      const asset = assetsByName.get(assetName);
-      const url = `https://api.github.com/repos/${definition.owner}/${definition.repository}/releases/assets/${asset.id}`;
-      const response = await this.githubRequest(definition, url, "application/octet-stream");
-      if (response.status !== 200) {
-        throw new UpdaterError("DOWNLOAD_FAILED", `Falha ao baixar ${assetName} do GitHub.`);
+    const cachedAssetNames = Object.keys(payload.rawAssets);
+    if (
+      cachedAssetNames.length !== RELEASE_ASSETS.length ||
+      cachedAssetNames.some((name) => !RELEASE_ASSETS.includes(name))
+    ) {
+      throw new UpdaterError(
+        "AUTHENTICATION_FAILED",
+        "O cache precisa conter exatamente os quatro assets autorizados."
+      );
+    }
+
+    this.validateRelease(definition, payload.releaseMetadata);
+    const releaseMetadata = cloneReleaseMetadata(payload.releaseMetadata);
+    const localSnapshot = cloneLocalSnapshot(payload.localSnapshot);
+    const rawAssets = {};
+    for (const assetName of RELEASE_ASSETS) {
+      const cachedBuffer = payload.rawAssets[assetName];
+      if (!(cachedBuffer instanceof ArrayBuffer)) {
+        throw new UpdaterError("AUTHENTICATION_FAILED", `O cache não contém bytes crus de ${assetName}.`);
       }
-      const buffer = cloneArrayBuffer(response.arrayBuffer);
+      rawAssets[assetName] = cachedBuffer.slice(0);
+    }
+
+    const { tagVersion, assetsByName } = this.validateRelease(
+      definition,
+      releaseMetadata
+    );
+    const computedHashes = Object.create(null);
+
+    for (const assetName of RELEASE_ASSETS) {
+      const asset = assetsByName.get(assetName);
+      const buffer = rawAssets[assetName];
       if (buffer.byteLength !== asset.size) {
         throw new UpdaterError(
-          "INVALID_DOWNLOAD",
-          `O tamanho baixado de ${assetName} difere do tamanho declarado pelo GitHub.`
+          "AUTHENTICATION_FAILED",
+          `O tamanho cacheado de ${assetName} difere da metadata autenticável.`
         );
       }
-      const expected = asset.digest.slice("sha256:".length).toLowerCase();
       const actual = await sha256Hex(buffer);
-      if (actual !== expected) {
+      if (`sha256:${actual}` !== asset.digest) {
         throw new UpdaterError(
           "INTEGRITY_FAILED",
           `O SHA-256 de ${assetName} diverge do digest publicado pelo GitHub.`
         );
       }
-      files.set(assetName, buffer);
-      expectedDigests.set(assetName, expected);
+      computedHashes[assetName] = actual;
     }
 
-    const manifest = decodeJson(files.get("manifest.json"), "O manifest.json remoto");
+    const manifest = decodeJson(rawAssets["manifest.json"], "O manifest.json remoto");
     if (!manifest || manifest.id !== definition.id) {
       throw new UpdaterError("INVALID_MANIFEST", "O ID do manifest remoto não é o autorizado.");
     }
@@ -384,10 +734,64 @@ class Tiago7PluginUpdater extends Plugin {
       );
     }
 
-    return { version: manifest.version, files, expectedDigests };
+    const parsedSignature = parseReleaseSignature(rawAssets[AUTHENTICATION_ASSET]);
+    const { keyId, verificationKey } = await derivePinnedAuthority();
+    validateSignatureBindings(
+      definition,
+      releaseMetadata,
+      manifest,
+      computedHashes,
+      parsedSignature,
+      keyId
+    );
+    await verifyEd25519Signature(
+      verificationKey,
+      parsedSignature.signatureBytes,
+      parsedSignature.signedPrefix
+    );
+
+    const pluginFiles = {};
+    for (const assetName of PLUGIN_FILES) {
+      pluginFiles[assetName] = rawAssets[assetName].slice(0);
+    }
+    return {
+      version: manifest.version,
+      pluginFiles: Object.freeze(pluginFiles),
+      localSnapshot,
+    };
   }
 
-  async fetchValidatedRelease(definition) {
+  async downloadAndValidate(definition, release, localSnapshot) {
+    const { assetsByName } = this.validateRelease(definition, release);
+    const rawAssets = {};
+
+    for (const assetName of RELEASE_ASSETS) {
+      const asset = assetsByName.get(assetName);
+      const url = `https://api.github.com/repos/${definition.owner}/${definition.repository}/releases/assets/${asset.id}`;
+      const response = await this.githubRequest(definition, url, "application/octet-stream");
+      if (response.status !== 200) {
+        throw new UpdaterError("DOWNLOAD_FAILED", `Falha ao baixar ${assetName} do GitHub.`);
+      }
+      const buffer = cloneArrayBuffer(response.arrayBuffer);
+      if (buffer.byteLength !== asset.size) {
+        throw new UpdaterError(
+          "INVALID_DOWNLOAD",
+          `O tamanho baixado de ${assetName} difere do tamanho declarado pelo GitHub.`
+        );
+      }
+      rawAssets[assetName] = buffer;
+    }
+
+    const payload = Object.freeze({
+      releaseMetadata: cloneReleaseMetadata(release),
+      rawAssets: Object.freeze(rawAssets),
+      localSnapshot: cloneLocalSnapshot(localSnapshot),
+    });
+    const authenticated = await this.authenticateCachedPayload(definition, payload);
+    return { payload, version: authenticated.version };
+  }
+
+  async fetchValidatedRelease(definition, localSnapshot) {
     const response = await this.githubRequest(
       definition,
       definition.latestReleaseApi,
@@ -396,7 +800,7 @@ class Tiago7PluginUpdater extends Plugin {
     if (response.status !== 200) {
       throw new UpdaterError("RELEASE_FAILED", "Não foi possível consultar a release no GitHub.");
     }
-    return this.downloadAndValidate(definition, response.json);
+    return this.downloadAndValidate(definition, response.json, localSnapshot);
   }
 
   async checkOne(pluginId, quiet = false) {
@@ -414,14 +818,15 @@ class Tiago7PluginUpdater extends Plugin {
     try {
       const local = await this.inspectLocal(definition);
       state.installedVersion = local.version;
-      const validated = await this.fetchValidatedRelease(definition);
+      const localSnapshot = cloneLocalSnapshot(local);
+      const validated = await this.fetchValidatedRelease(definition, localSnapshot);
       state.availableVersion = validated.version;
 
       if (local.installed && compareVersions(validated.version, local.version) <= 0) {
         state.status = "Atualizado";
         state.detail = "A versão instalada já é igual ou superior à release válida mais recente.";
       } else {
-        state.installable = validated;
+        state.installable = validated.payload;
         state.status = local.installed ? "Atualização disponível" : "Não instalado";
         state.detail = local.installed
           ? "A release foi baixada e validada. Clique em Atualizar para instalá-la."
@@ -431,7 +836,7 @@ class Tiago7PluginUpdater extends Plugin {
     } catch (error) {
       state.status = error && error.code === "RELEASE_NOT_IMMUTABLE"
         ? "Release não imutável"
-        : error && error.code === "INTEGRITY_FAILED"
+        : error && ["INTEGRITY_FAILED", "AUTHENTICATION_FAILED", "INVALID_BASE64"].includes(error.code)
           ? "Verificação de integridade falhou"
           : "Erro ao verificar";
       state.detail = this.errorMessage(error);
@@ -450,25 +855,12 @@ class Tiago7PluginUpdater extends Plugin {
     new Notice("Verificação dos plugins autorizados concluída.");
   }
 
-  async verifyCachedPayload(payload) {
-    for (const assetName of REQUIRED_ASSETS) {
-      const buffer = payload.files.get(assetName);
-      const expected = payload.expectedDigests.get(assetName);
-      if (!(buffer instanceof ArrayBuffer) || (await sha256Hex(buffer)) !== expected) {
-        throw new UpdaterError(
-          "INTEGRITY_FAILED",
-          `Os dados validados de ${assetName} não estão mais íntegros.`
-        );
-      }
-    }
-  }
-
   async createBackup(definition, version) {
     const pluginDirectory = this.pluginDirectory(definition);
     const snapshots = new Map();
     const present = {};
 
-    for (const assetName of REQUIRED_ASSETS) {
+    for (const assetName of PLUGIN_FILES) {
       const path = normalizePath(`${pluginDirectory}/${assetName}`);
       present[assetName] = await this.app.vault.adapter.exists(path);
       if (present[assetName]) {
@@ -511,7 +903,7 @@ class Tiago7PluginUpdater extends Plugin {
         metadata.pluginId !== definition.id ||
         !strictVersion(metadata.version) ||
         !metadata.files ||
-        REQUIRED_ASSETS.some((name) => typeof metadata.files[name] !== "boolean")
+        PLUGIN_FILES.some((name) => typeof metadata.files[name] !== "boolean")
       ) {
         return null;
       }
@@ -540,7 +932,7 @@ class Tiago7PluginUpdater extends Plugin {
 
   async restoreBackupFiles(definition, backup) {
     const restored = new Map();
-    for (const assetName of REQUIRED_ASSETS) {
+    for (const assetName of PLUGIN_FILES) {
       if (backup.metadata.files[assetName]) {
         const path = normalizePath(`${backup.folder}/${assetName}`);
         if (!(await this.app.vault.adapter.exists(path))) {
@@ -567,6 +959,8 @@ class Tiago7PluginUpdater extends Plugin {
     const state = this.states.get(pluginId);
     if (state.busy || !state.installable) return;
 
+    const payload = state.installable;
+    state.installable = null;
     state.busy = true;
     state.detail = "Preparando a instalação validada.";
     this.renderSettings();
@@ -574,16 +968,15 @@ class Tiago7PluginUpdater extends Plugin {
     const attemptedWrites = [];
 
     try {
-      const payload = state.installable;
-      await this.verifyCachedPayload(payload);
+      const authenticated = await this.authenticateCachedPayload(definition, payload);
       const local = await this.inspectLocal(definition);
-      if (local.version !== state.installedVersion) {
+      if (!sameLocalSnapshot(local, authenticated.localSnapshot)) {
         throw new UpdaterError(
           "LOCAL_CHANGED",
           "A instalação local mudou desde a verificação. Verifique novamente."
         );
       }
-      if (local.installed && compareVersions(payload.version, local.version) <= 0) {
+      if (local.installed && compareVersions(authenticated.version, local.version) <= 0) {
         throw new UpdaterError("NOT_NEWER", "A versão remota não é superior à instalada.");
       }
       if (local.installed) {
@@ -595,12 +988,11 @@ class Tiago7PluginUpdater extends Plugin {
       for (const assetName of INSTALL_ORDER) {
         const target = normalizePath(`${directory}/${assetName}`);
         attemptedWrites.push(target);
-        await this.app.vault.adapter.writeBinary(target, payload.files.get(assetName));
+        await this.app.vault.adapter.writeBinary(target, authenticated.pluginFiles[assetName]);
       }
 
-      state.installedVersion = payload.version;
-      state.availableVersion = payload.version;
-      state.installable = null;
+      state.installedVersion = authenticated.version;
+      state.availableVersion = authenticated.version;
       state.status = "Atualizado";
       state.detail = "Instalação concluída. Reinicie o Obsidian para carregar a nova versão.";
       state.hasBackup = Boolean(backup || (await this.findLatestBackup(definition)));
@@ -624,7 +1016,7 @@ class Tiago7PluginUpdater extends Plugin {
       } catch (recoveryError) {
         recoveryMessage = ` A recuperação automática também falhou: ${this.errorMessage(recoveryError)}`;
       }
-      state.status = error && error.code === "INTEGRITY_FAILED"
+      state.status = error && ["INTEGRITY_FAILED", "AUTHENTICATION_FAILED", "INVALID_BASE64"].includes(error.code)
         ? "Verificação de integridade falhou"
         : "Erro ao verificar";
       state.detail = `${this.errorMessage(error)}${recoveryMessage}`;
