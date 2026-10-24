@@ -1,0 +1,20 @@
+.tiago7-updater-plugin-entry {
+  border-top: 1px solid var(--background-modifier-border);
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+
+.tiago7-updater-plugin-entry h3 {
+  margin-bottom: 0.35rem;
+}
+
+.tiago7-updater-status {
+  color: var(--text-muted);
+  margin: 0.25rem 0 0.75rem;
+}
+
+.tiago7-updater-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}

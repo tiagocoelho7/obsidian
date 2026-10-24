@@ -1,0 +1,9 @@
+{
+  "id": "tiago7-plugin-updater-plugin-obsidian",
+  "name": "tiago7 Plugin Updater Plugin Obsidian",
+  "version": "1.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Atualizador manual e conservador para plugins explicitamente autorizados de tiagocoelho7.",
+  "author": "Tiago + ChatGPT",
+  "isDesktopOnly": false
+}
