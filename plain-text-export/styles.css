@@ -181,3 +181,300 @@
 		min-width: 0;
 	}
 }
+
+/* v1.5.0 — action modal polish + accessibility */
+.vpte-actions-modal .vpte-modal-intro,
+.vpte-multi-modal .vpte-modal-intro {
+	font-size: var(--font-ui-smaller);
+	line-height: 1.45;
+	color: var(--text-muted);
+	margin-top: 6px;
+	margin-bottom: 8px;
+}
+
+.vpte-selected-note {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0 0 12px;
+	font-size: var(--font-ui-smaller);
+	font-weight: 650;
+	color: var(--color-purple, #8b5cf6);
+	max-width: 100%;
+}
+
+.vpte-selected-note-mark {
+	font-size: 0.78em;
+	line-height: 1;
+}
+
+.vpte-action-setting.setting-item {
+	align-items: center;
+	min-height: 88px;
+}
+
+.vpte-action-setting .setting-item-info,
+.vpte-action-setting .setting-item-control {
+	align-self: center;
+}
+
+.vpte-action-setting .setting-item-control {
+	margin-top: 0;
+	min-width: 164px;
+	justify-content: flex-end;
+}
+
+.vpte-action-setting .setting-item-control button {
+	min-width: 132px;
+	min-height: 38px;
+}
+
+.vpte-actions-modal button:focus-visible,
+.vpte-multi-modal button:focus-visible,
+.vpte-multi-modal input:focus-visible,
+.vpte-accessible-setting input:focus-visible,
+.vpte-accessible-setting button:focus-visible {
+	outline: 3px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+.vpte-sr-live {
+	position: fixed !important;
+	width: 1px !important;
+	height: 1px !important;
+	padding: 0 !important;
+	margin: -1px !important;
+	overflow: hidden !important;
+	clip: rect(0, 0, 0, 0) !important;
+	white-space: nowrap !important;
+	border: 0 !important;
+	pointer-events: none !important;
+}
+
+@media (max-width: 600px) {
+	.vpte-action-setting.setting-item {
+		min-height: 0;
+		gap: 12px;
+	}
+
+	.vpte-action-setting .setting-item-control {
+		min-width: 0;
+	}
+
+	.vpte-action-setting .setting-item-control button,
+	.vpte-selection-toolbar button,
+	.vpte-multi-footer button,
+	.vpte-search {
+		min-height: 44px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.vpte-modal *,
+	.vpte-multi-shell * {
+		scroll-behavior: auto !important;
+		transition-duration: 0.01ms !important;
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+	}
+}
+
+@media (prefers-contrast: more) {
+	.vpte-action-setting,
+	.vpte-file-list,
+	.vpte-file-row,
+	.vpte-multi-footer {
+		border-color: var(--text-normal);
+	}
+
+	.vpte-selected-note {
+		font-weight: 800;
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+}
+
+@media (forced-colors: active) {
+	.vpte-selected-note {
+		color: CanvasText;
+		text-decoration: underline;
+	}
+
+	.vpte-actions-modal button:focus-visible,
+	.vpte-multi-modal button:focus-visible,
+	.vpte-multi-modal input:focus-visible,
+	.vpte-accessible-setting input:focus-visible,
+	.vpte-accessible-setting button:focus-visible {
+		outline: 3px solid Highlight;
+	}
+}
+
+/* v1.6.1 — compact export palette + direct File Explorer batch selection */
+.vpte-export-palette {
+	position: fixed;
+	z-index: 10000;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 12px;
+	background: var(--background-primary);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+}
+
+.vpte-export-palette[hidden] {
+	display: none !important;
+}
+
+.vpte-export-palette-button {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 46px;
+	height: 46px;
+	min-width: 46px;
+	min-height: 46px;
+	padding: 0;
+	border-radius: 9px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-normal);
+}
+
+.vpte-export-palette-button svg {
+	width: 25px;
+	height: 25px;
+}
+
+.vpte-export-palette-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 25px;
+	height: 25px;
+}
+
+.vpte-export-palette-button:hover:not(:disabled) {
+	background: var(--background-modifier-hover);
+}
+
+.vpte-export-palette-button.is-active {
+	border: 2px solid var(--interactive-accent);
+	background: var(--background-modifier-active-hover);
+	box-shadow: inset 0 0 0 1px var(--interactive-accent);
+}
+
+.vpte-export-palette-button:disabled {
+	opacity: 0.42;
+	cursor: default;
+}
+
+.vpte-export-palette-button:focus-visible {
+	outline: 3px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+.vpte-export-palette-badge {
+	position: absolute;
+	top: -6px;
+	right: -6px;
+	min-width: 19px;
+	height: 19px;
+	padding: 0 5px;
+	border-radius: 999px;
+	border: 2px solid var(--background-primary);
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: 11px;
+	font-weight: 800;
+	line-height: 15px;
+	text-align: center;
+}
+
+body.vpte-batch-select-mode .nav-file-title.vpte-batch-selectable {
+	cursor: pointer;
+}
+
+body.vpte-batch-select-mode .nav-file-title.vpte-batch-selectable:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
+.nav-file-title.vpte-batch-selected {
+	position: relative;
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+	background: var(--background-modifier-hover);
+}
+
+.vpte-batch-check {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	margin-left: auto;
+	border-radius: 50%;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: 12px;
+	font-weight: 900;
+	line-height: 1;
+	pointer-events: none;
+}
+
+@media (max-width: 600px) {
+	.vpte-export-palette {
+		gap: 10px;
+		padding: 10px;
+	}
+
+	.vpte-export-palette-button {
+		width: 50px;
+		height: 50px;
+		min-width: 50px;
+		min-height: 50px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.vpte-export-palette,
+	.vpte-export-palette * {
+		transition: none !important;
+		animation: none !important;
+	}
+}
+
+@media (prefers-contrast: more) {
+	.vpte-export-palette,
+	.vpte-export-palette-button,
+	.nav-file-title.vpte-batch-selected {
+		border-color: var(--text-normal);
+	}
+
+	.vpte-export-palette-button.is-active,
+	.nav-file-title.vpte-batch-selected {
+		outline: 3px solid var(--text-normal);
+	}
+}
+
+@media (forced-colors: active) {
+	.vpte-export-palette {
+		border: 1px solid CanvasText;
+	}
+
+	.vpte-export-palette-button.is-active,
+	.nav-file-title.vpte-batch-selected {
+		outline: 3px solid Highlight;
+		background: Canvas;
+	}
+
+	.vpte-batch-check,
+	.vpte-export-palette-badge {
+		background: Highlight;
+		color: HighlightText;
+	}
+}
